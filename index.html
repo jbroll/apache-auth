@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Apache Token Auth</title>
+<link rel="stylesheet" href="?action=css">
+</head>
+<body>
+
+<!-- auth overlay -->
+<div id="auth-overlay">
+  <div class="auth-box">
+    <h2>Apache Token Auth</h2>
+    <p>Enter your master bearer token to continue.</p>
+    <input id="master-input" type="password" placeholder="Master token" autocomplete="off" />
+    <div class="err" id="auth-err">Invalid token — access denied.</div>
+    <button class="btn-primary" id="auth-btn">Connect</button>
+  </div>
+</div>
+
+<!-- main UI (hidden until authed) -->
+<div id="app" style="display:none">
+  <header>
+    <div class="dot"></div>
+    <h1>Apache Token Auth</h1>
+    <div class="header-right">
+      <span class="token-badge" id="token-preview"></span>
+      <button class="btn-ghost btn-sm" id="logout-btn">Logout</button>
+    </div>
+  </header>
+
+  <main>
+    <div class="toolbar">
+      <h2>Virtual Hosts</h2>
+      <span class="spacer"></span>
+      <button class="btn-ghost btn-sm" id="refresh-btn">Refresh</button>
+    </div>
+
+    <table class="tree-table" id="tree">
+      <thead>
+        <tr>
+          <th style="width:100%">Host / Token</th>
+          <th style="width:160px; white-space:nowrap">Label</th>
+          <th style="width:100px"></th>
+        </tr>
+      </thead>
+      <tbody id="tree-body">
+        <tr class="row-empty">
+          <td colspan="3"><div class="cell-inner"><span class="spinner"></span>&nbsp; Loading…</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </main>
+</div>
+
+<div id="toast"></div>
+
+<script src="?action=js"></script>
+</body>
+</html>
