@@ -104,6 +104,10 @@ Switching states is instant (filesystem operation, no Apache reload).
 - **`umask 027`** — token files are `640` (root:www-data), not world-readable.
 - **Atomic token writes** — `mktemp` + `mv` prevents partial token files being live.
 - Tokens are 32 hex characters (128-bit entropy from `/dev/urandom`).
+- **Suexec isolation** — for stronger separation, run the CGI under a dedicated user rather than the shared `www-data` process, so a compromised web app cannot read the master token or manipulate the token store:
+  ```apache
+  SuexecUserGroup token-admin token-admin
+  ```
 
 ## Deployment
 
