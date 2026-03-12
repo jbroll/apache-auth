@@ -111,7 +111,7 @@ Switching states is instant (filesystem operation, no Apache reload).
 
 ## Deployment
 
-Use the `token_auth` module from [deploy.sh](https://github.com/johnbma/deploy.sh):
+Use the `token_auth` module from [deploy.sh](https://github.com/jbroll/deploy.sh):
 
 ```sh
 # deploy.conf
