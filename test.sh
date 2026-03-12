@@ -862,11 +862,11 @@ esac
 
 # ── open/close: basic operation ────────────────────────────────────────────
 
-Test "open: creates .open sentinel file"
+Test "open: creates OPEN sentinel file"
 mkdir -p "$TOKEN_ROOT/open.example.com"
 printf 'host=open.example.com' | \
     cgi "$auth" QUERY_STRING=action=open REQUEST_METHOD=POST > /dev/null
-if [ -f "$TOKEN_ROOT/open.example.com/.open" ]; then Pass; else Fail; fi
+if [ -f "$TOKEN_ROOT/open.example.com/OPEN" ]; then Pass; else Fail; fi
 
 Test "open: returns status open"
 result=$(printf 'host=open.example.com' | \
@@ -878,7 +878,7 @@ rm -rf "$TOKEN_ROOT/newopen.example.com"
 printf 'host=newopen.example.com' | \
     cgi "$auth" QUERY_STRING=action=open REQUEST_METHOD=POST > /dev/null
 if [ -d "$TOKEN_ROOT/newopen.example.com" ] && \
-   [ -f "$TOKEN_ROOT/newopen.example.com/.open" ]; then Pass; else Fail; fi
+   [ -f "$TOKEN_ROOT/newopen.example.com/OPEN" ]; then Pass; else Fail; fi
 rm -rf "$TOKEN_ROOT/newopen.example.com"
 
 Test "open: 405 for GET request"
@@ -894,10 +894,10 @@ CompareArgs \
     "$(cgi_status "$auth" QUERY_STRING=action=open REQUEST_METHOD=POST <<< 'host=')" \
     "400"
 
-Test "close: removes .open sentinel file"
+Test "close: removes OPEN sentinel file"
 printf 'host=open.example.com' | \
     cgi "$auth" QUERY_STRING=action=close REQUEST_METHOD=POST > /dev/null
-if [ ! -f "$TOKEN_ROOT/open.example.com/.open" ]; then Pass; else Fail; fi
+if [ ! -f "$TOKEN_ROOT/open.example.com/OPEN" ]; then Pass; else Fail; fi
 
 Test "close: returns status closed"
 printf 'host=open.example.com' | \
@@ -906,8 +906,8 @@ result=$(printf 'host=open.example.com' | \
     cgi "$auth" QUERY_STRING=action=close REQUEST_METHOD=POST)
 CompareArgs "$result" '{"status":"closed"}'
 
-Test "close: silently succeeds when .open does not exist"
-rm -f "$TOKEN_ROOT/open.example.com/.open"
+Test "close: silently succeeds when OPEN does not exist"
+rm -f "$TOKEN_ROOT/open.example.com/OPEN"
 result=$(printf 'host=open.example.com' | \
     cgi "$auth" QUERY_STRING=action=close REQUEST_METHOD=POST)
 CompareArgs "$result" '{"status":"closed"}'
@@ -925,15 +925,15 @@ CompareArgs \
     "$(cgi_status "$auth" QUERY_STRING=action=close REQUEST_METHOD=POST <<< 'host=')" \
     "400"
 
-# ── open/close: .open sentinel excluded from token listing ─────────────────
+# ── open/close: OPEN sentinel excluded from token listing ──────────────────
 
-Test "tokens: .open sentinel file is not listed as a token"
+Test "tokens: OPEN sentinel file is not listed as a token"
 printf 'host=open.example.com' | \
     cgi "$auth" QUERY_STRING=action=open REQUEST_METHOD=POST > /dev/null
 result=$(cgi "$auth" QUERY_STRING="action=tokens&host=open.example.com")
 case "$result" in
-    *'".open"'*) Fail ;;
-    *)           Pass ;;
+    *'"OPEN"'*) Fail ;;
+    *)          Pass ;;
 esac
 
 # ── open/close: open status in tokens response ─────────────────────────────

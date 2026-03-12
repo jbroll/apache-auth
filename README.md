@@ -28,7 +28,7 @@ Token validation is a filesystem `stat` — no process is spawned, no reload nee
     tokens/
         api.example.com/
             a3f9...           # Token file — filename is the token, content is the label
-            .open             # Sentinel: present = open access, absent = token required
+            OPEN              # Sentinel: present = open access, absent = token required
         app.example.com/
             7c2b...
     apache/
@@ -92,7 +92,7 @@ curl -s -X POST -H "Authorization: Bearer $MASTER" \
 A host is in one of two states:
 
 - **Open** — `tokens/<host>/.open` exists. Requests pass without a token. Useful during initial setup or maintenance.
-- **Protected** — `.open` absent, at least one token exists. Requests must supply a valid bearer token.
+- **Protected** — `OPEN` absent, at least one token exists. Requests must supply a valid bearer token.
 
 Switching states is instant (filesystem operation, no Apache reload).
 
