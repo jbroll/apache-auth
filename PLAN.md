@@ -61,6 +61,14 @@ RewriteEngine On
 #      with an alphanumeric character (rejects leading/trailing dot or hyphen).
 #   2. Denylist: reject consecutive dots which Apache's PCRE cannot exclude
 #      with a pure positive regex without lookaheads.
+
+# If a .open sentinel file exists for this host, allow without a token.
+RewriteCond %{SERVER_NAME} ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$
+RewriteCond %{SERVER_NAME} !\.\.
+RewriteCond /etc/apache-token-auth/tokens/%{SERVER_NAME}/.open -f
+RewriteRule ^ - [L]
+
+# Otherwise require a valid bearer token.
 RewriteCond %{SERVER_NAME} ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$
 RewriteCond %{SERVER_NAME} !\.\.
 RewriteCond %{HTTP:Authorization} ^Bearer\s+([a-f0-9]{32})$
@@ -70,8 +78,23 @@ RewriteRule ^ - [L]
 RewriteRule ^ - [F]
 ```
 
-`%{SERVER_NAME}` is resolved by Apache at request time, scoping token lookup
-to the vhost being accessed. No per-host configuration files are needed.
+`%{SERVER_NAME}` is resolved by Apache at request time, scoping both the
+sentinel check and the token lookup to the vhost being accessed.
+
+### Open access sentinel
+
+A host can be switched to open access (no token required) by creating a
+`.open` file in its token directory:
+
+```
+/etc/apache-token-auth/tokens/example.com/.open
+```
+
+Deleting the file immediately re-enforces token authentication. No Apache
+reload is needed in either direction — the `-f` check is evaluated live.
+
+The `.open` file is never returned by the `tokens` action because its name
+does not match the 32-character hex `valid_token` pattern.
 
 ### Vhost Include
 
@@ -148,10 +171,12 @@ never exposed through the API.
 | Method | Query              | Body                          | Description                        |
 |--------|--------------------|-------------------------------|------------------------------------|
 | GET    | `action=hosts`     | —                             | List all Apache vhosts             |
-| GET    | `action=list`      | —                             | List hosts that have tokens        |
-| GET    | `action=tokens`    | `host=<host>`                 | List tokens and labels for a host  |
+| GET    | `action=list`      | —                             | List managed hosts with open status|
+| GET    | `action=tokens`    | `host=<host>`                 | List tokens and open status for a host |
 | POST   | `action=create`    | `host=<host>&label=<label>`   | Create a new token for a host      |
 | POST   | `action=delete`    | `host=<host>&token=<token>`   | Delete a specific token            |
+| POST   | `action=open`      | `host=<host>`                 | Set host to open access            |
+| POST   | `action=close`     | `host=<host>`                 | Set host to require a token        |
 
 All responses are JSON. HTTP status codes are used correctly (200, 400, 403, 500).
 
@@ -164,13 +189,14 @@ All responses are JSON. HTTP status codes are used correctly (200, 400, 403, 500
 
 **`action=list`**
 ```json
-{ "hosts": ["api.example.com"] }
+{ "hosts": [{"host": "api.example.com", "open": false}] }
 ```
 
 **`action=tokens`** (with `host=api.example.com`)
 ```json
 {
   "host": "api.example.com",
+  "open": false,
   "tokens": [
     { "token": "7f9e3c2a...", "label": "mobile app prod" },
     { "token": "a1b2c3d4...", "label": "ci pipeline" }

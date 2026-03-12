@@ -6,7 +6,9 @@ const API = window.location.pathname;   // same URL, same CGI
 // localStorage, which are accessible to any JS running in the same origin.
 let masterToken = '';
 
-// per-host state: { loaded: bool, open: bool, tokens: [{token,label}] }
+// per-host state: { loaded: bool, open: bool, tokens: [{token,label}], accessOpen: bool|null }
+// open       — whether the host row is expanded in the UI
+// accessOpen — true=open access, false=token required, null=unknown (not yet in token store)
 const hostState = {};
 
 // ── api ────────────────────────────────────────────────────────────────────
@@ -87,6 +89,14 @@ function renderHost(host) {
   const count = s.loaded ? s.tokens.length : '?';
   const badgeClass = (s.loaded && s.tokens.length === 0) ? 'badge empty' : 'badge';
 
+  let pill = '';
+  if (s.accessOpen === true)  pill = `<span class="pill pill-open">open</span>`;
+  if (s.accessOpen === false) pill = `<span class="pill pill-protected">protected</span>`;
+
+  const accessBtn = s.accessOpen === true
+    ? `<button class="btn-ghost btn-sm" data-set-access="${escHtml(host)}" data-want-open="false">Protect</button>`
+    : `<button class="btn-ghost btn-sm" data-set-access="${escHtml(host)}" data-want-open="true">Open</button>`;
+
   const tr = document.createElement('tr');
   tr.className = 'row-host';
   tr.dataset.host = host;
@@ -96,14 +106,22 @@ function renderHost(host) {
         <span class="toggle-arrow ${s.open ? 'open' : ''}">${arrowSvg()}</span>
         <span class="host-name">${escHtml(host)}</span>
         <span class="${badgeClass}" id="badge-${cssId(host)}">${count}</span>
+        ${pill}
       </div>
     </td>
     <td>
       <div class="host-actions">
+        ${accessBtn}
         <button class="btn-primary btn-sm" data-new-token="${escHtml(host)}">+ Token</button>
       </div>
     </td>`;
   return tr;
+}
+
+function updateHostRow(host) {
+  const tbody = document.getElementById('tree-body');
+  const old = tbody.querySelector(`tr.row-host[data-host="${CSS.escape(host)}"]`);
+  if (old) old.replaceWith(renderHost(host));
 }
 
 function renderTokenRow(host, tok, label) {
@@ -214,18 +232,27 @@ async function loadHosts() {
   const tbody = document.getElementById('tree-body');
   tbody.innerHTML = `<tr class="row-empty"><td colspan="3"><div class="cell-inner"><span class="spinner"></span>&nbsp; Loading…</div></td></tr>`;
 
-  let hosts;
+  let hosts, managed;
   try {
-    const data = await api({ action: 'hosts' });
-    hosts = data.hosts || [];
+    const [hostsData, listData] = await Promise.all([
+      api({ action: 'hosts' }),
+      api({ action: 'list' }),
+    ]);
+    hosts   = hostsData.hosts || [];
+    managed = listData.hosts  || [];
   } catch (e) {
     tbody.innerHTML = `<tr class="row-empty"><td colspan="3"><div class="cell-inner">Error: ${escHtml(e.message)}</div></td></tr>`;
     return;
   }
 
-  // preserve open/loaded state for hosts already known
+  // Build map of managed hosts → open status
+  const managedMap = {};
+  for (const m of managed) managedMap[m.host] = m.open;
+
+  // preserve open/loaded state for hosts already known; update accessOpen
   for (const h of hosts) {
-    if (!hostState[h]) hostState[h] = { open: false, loaded: false, tokens: [] };
+    if (!hostState[h]) hostState[h] = { open: false, loaded: false, tokens: [], accessOpen: null };
+    if (h in managedMap) hostState[h].accessOpen = managedMap[h];
   }
 
   tbody.innerHTML = '';
@@ -249,12 +276,14 @@ async function loadTokens(host) {
     const data = await api({ action: 'tokens', host });
     s.tokens = data.tokens || [];
     s.loaded = true;
+    if (typeof data.open === 'boolean') s.accessOpen = data.open;
   } catch (e) {
     s.loaded = true;
     s.tokens = [];
     toast(`Failed to load tokens for ${host}: ${e.message}`, 'err');
   }
 
+  updateHostRow(host);
   updateBadge(host);
   redrawChildren(host);
 }
@@ -320,11 +349,24 @@ async function createToken(host) {
     const data = await api({ action: 'create' }, { host, label });
     const s = hostState[host];
     s.tokens.push({ token: data.token, label: data.label });
+    if (s.accessOpen === null) { s.accessOpen = false; updateHostRow(host); }
     updateBadge(host);
     redrawChildren(host);
     toast(`Token created for ${host}`);
   } catch (e) {
     toast(`Create failed: ${e.message}`, 'err');
+  }
+}
+
+async function setAccess(host, wantOpen) {
+  try {
+    await api({ action: wantOpen ? 'open' : 'close' }, { host });
+    if (!hostState[host]) hostState[host] = { open: false, loaded: false, tokens: [], accessOpen: null };
+    hostState[host].accessOpen = wantOpen;
+    updateHostRow(host);
+    toast(wantOpen ? `${host}: open access` : `${host}: token required`);
+  } catch (e) {
+    toast(`Failed: ${e.message}`, 'err');
   }
 }
 
@@ -347,6 +389,7 @@ document.getElementById('tree-body').addEventListener('click', async e => {
   if (!btn) return;
 
   if (btn.dataset.toggle)         return toggleHost(btn.dataset.toggle);
+  if (btn.dataset.setAccess)      return setAccess(btn.dataset.setAccess, btn.dataset.wantOpen === 'true');
   if (btn.dataset.newToken)       return showNewTokenRow(btn.dataset.newToken);
   if (btn.dataset.confirmCreate)  return createToken(btn.dataset.confirmCreate);
   if (btn.dataset.cancelNew) {

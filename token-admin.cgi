@@ -256,7 +256,9 @@ list)
         [ -d "$d" ] || continue
         h=${d%/}; h=${h##*/}
         valid_host "$h" || continue    # skip directories with non-hostname names
-        body="${body}${sep}\"$(json_escape "$h")\""
+        open=false
+        [ -f "$TOKEN_ROOT/$h/.open" ] && open=true
+        body="${body}${sep}{\"host\":\"$(json_escape "$h")\",\"open\":$open}"
         sep=','
     done
     body="${body}]}"
@@ -268,7 +270,9 @@ tokens)
     host=$(param_get host "${QUERY_STRING:-}")
     valid_host "$host" || json_error 400 "invalid host"
     [ -d "$TOKEN_ROOT/$host" ]  || json_error 404 "host not found"
-    body="{\"host\":\"$(json_escape "$host")\",\"tokens\":["
+    open=false
+    [ -f "$TOKEN_ROOT/$host/.open" ] && open=true
+    body="{\"host\":\"$(json_escape "$host")\",\"open\":$open,\"tokens\":["
     sep=''
     for f in "$TOKEN_ROOT/$host/"*; do
         [ -f "$f" ] || continue
@@ -318,6 +322,25 @@ delete)
     rm -f "$TOKEN_ROOT/$host/$tok" || json_error 500 "cannot delete token"
     json_headers
     printf '{"status":"deleted"}\n'
+    ;;
+
+open)
+    [ "${REQUEST_METHOD:-}" = "POST" ] || json_error 405 "method not allowed"
+    host=$(param_get host "$POSTDATA")
+    valid_host "$host" || json_error 400 "invalid host"
+    mkdir -p "$TOKEN_ROOT/$host"        || json_error 500 "cannot create host directory"
+    touch "$TOKEN_ROOT/$host/.open"     || json_error 500 "cannot set open access"
+    json_headers
+    printf '{"status":"open"}\n'
+    ;;
+
+close)
+    [ "${REQUEST_METHOD:-}" = "POST" ] || json_error 405 "method not allowed"
+    host=$(param_get host "$POSTDATA")
+    valid_host "$host" || json_error 400 "invalid host"
+    rm -f "$TOKEN_ROOT/$host/.open"     || json_error 500 "cannot remove open access"
+    json_headers
+    printf '{"status":"closed"}\n'
     ;;
 
 *)

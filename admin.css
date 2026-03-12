@@ -169,6 +169,16 @@
   }
   .badge.empty { background: var(--border); color: var(--muted); }
 
+  .pill {
+    font-size: 10px; font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 10px;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+  .pill-open      { background: #1a3320; color: #5db87a; }
+  .pill-protected { background: var(--border); color: var(--muted); }
+
   .host-actions { display: flex; gap: 6px; padding-right: 4px; }
 
   /* token child row */
