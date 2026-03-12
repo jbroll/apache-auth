@@ -62,10 +62,10 @@ RewriteEngine On
 #   2. Denylist: reject consecutive dots which Apache's PCRE cannot exclude
 #      with a pure positive regex without lookaheads.
 
-# If a .open sentinel file exists for this host, allow without a token.
+# If an OPEN sentinel file exists for this host, allow without a token.
 RewriteCond %{SERVER_NAME} ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$
 RewriteCond %{SERVER_NAME} !\.\.
-RewriteCond /etc/apache-token-auth/tokens/%{SERVER_NAME}/.open -f
+RewriteCond /etc/apache-token-auth/tokens/%{SERVER_NAME}/OPEN -f
 RewriteRule ^ - [L]
 
 # Otherwise require a valid bearer token.
@@ -83,18 +83,20 @@ sentinel check and the token lookup to the vhost being accessed.
 
 ### Open access sentinel
 
-A host can be switched to open access (no token required) by creating a
-`.open` file in its token directory:
+A host can be switched to open access (no token required) by creating an
+`OPEN` file in its token directory:
 
 ```
-/etc/apache-token-auth/tokens/example.com/.open
+/etc/apache-token-auth/tokens/example.com/OPEN
 ```
 
 Deleting the file immediately re-enforces token authentication. No Apache
 reload is needed in either direction — the `-f` check is evaluated live.
 
-The `.open` file is never returned by the `tokens` action because its name
-does not match the 32-character hex `valid_token` pattern.
+The `OPEN` file is never returned by the `tokens` action because its name
+does not match the 32-character hex `valid_token` pattern. Using an
+uppercase visible name (rather than a hidden dotfile) makes open-access
+state immediately apparent when inspecting the token directory with `ls`.
 
 ### Vhost Include
 
