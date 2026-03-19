@@ -6,7 +6,7 @@ const API = window.location.pathname;   // same URL, same CGI
 // localStorage, which are accessible to any JS running in the same origin.
 let masterToken = '';
 
-// per-host state: { loaded: bool, open: bool, tokens: [{token,label}], accessOpen: bool|null }
+// per-host state: { loaded: bool, open: bool, credentials: [{type,value,label}], accessOpen: bool|null }
 // open       — whether the host row is expanded in the UI
 // accessOpen — true=open access, false=token required, null=unknown (not yet in token store)
 const hostState = {};
@@ -39,12 +39,18 @@ function toast(msg, type = 'ok') {
 }
 
 // ── auth ───────────────────────────────────────────────────────────────────
+const STORAGE_KEY = 'apache-auth-master-token';
+
 async function tryAuth() {
   const input = document.getElementById('master-input').value.trim();
   if (!input) return;
   masterToken = input;
   try {
     await api({ action: 'hosts' });
+    if (document.getElementById('remember-chk').checked)
+      localStorage.setItem(STORAGE_KEY, masterToken);
+    else
+      localStorage.removeItem(STORAGE_KEY);
     showApp();
   } catch {
     document.getElementById('auth-err').style.display = 'block';
@@ -66,15 +72,22 @@ document.getElementById('master-input').addEventListener('keydown', e => {
 });
 document.getElementById('logout-btn').addEventListener('click', () => {
   masterToken = '';
-  // Clear cached host/token state so a re-login always sees fresh data.
+  localStorage.removeItem(STORAGE_KEY);
   Object.keys(hostState).forEach(k => delete hostState[k]);
   document.getElementById('auth-overlay').style.display = '';
   document.getElementById('app').style.display = 'none';
   document.getElementById('master-input').value = '';
+  document.getElementById('remember-chk').checked = false;
   document.getElementById('auth-err').style.display = 'none';
 });
 
-// No auto-login: token is memory-only, re-enter on each page load.
+// Auto-login from saved token if present.
+const saved = localStorage.getItem(STORAGE_KEY);
+if (saved) {
+  document.getElementById('master-input').value = saved;
+  document.getElementById('remember-chk').checked = true;
+  tryAuth();
+}
 
 // ── tree rendering ─────────────────────────────────────────────────────────
 
@@ -86,8 +99,8 @@ function arrowSvg() {
 
 function renderHost(host) {
   const s = hostState[host];
-  const count = s.loaded ? s.tokens.length : '?';
-  const badgeClass = (s.loaded && s.tokens.length === 0) ? 'badge empty' : 'badge';
+  const count = s.loaded ? s.credentials.length : '?';
+  const badgeClass = (s.loaded && s.credentials.length === 0) ? 'badge empty' : 'badge';
 
   let pill = '';
   if (s.accessOpen === true)  pill = `<span class="pill pill-open">open</span>`;
@@ -112,6 +125,7 @@ function renderHost(host) {
     <td>
       <div class="host-actions">
         ${accessBtn}
+        <button class="btn-ghost btn-sm" data-new-ip="${escHtml(host)}">+ IP</button>
         <button class="btn-primary btn-sm" data-new-token="${escHtml(host)}">+ Token</button>
       </div>
     </td>`;
@@ -124,15 +138,21 @@ function updateHostRow(host) {
   if (old) old.replaceWith(renderHost(host));
 }
 
-function renderTokenRow(host, tok, label) {
+function renderCredentialRow(host, type, value, label) {
   const tr = document.createElement('tr');
-  tr.className = 'row-token';
+  tr.className = 'row-credential';
   tr.dataset.host = host;
-  tr.dataset.token = tok;
+  tr.dataset.credType = type;
+  tr.dataset.credValue = value;
+  const valueClass = type === 'ip' ? 'ip-value' : 'token-value';
+  const typeBadge = type === 'ip'
+    ? `<span class="cred-type cred-type-ip">IP</span>`
+    : `<span class="cred-type cred-type-bearer">token</span>`;
   tr.innerHTML = `
     <td>
       <div class="cell-inner">
-        <span class="token-value" title="${escHtml(tok)}">${escHtml(tok)}</span>
+        ${typeBadge}
+        <span class="${valueClass}" title="${escHtml(value)}">${escHtml(value)}</span>
       </div>
     </td>
     <td>
@@ -142,7 +162,10 @@ function renderTokenRow(host, tok, label) {
     </td>
     <td>
       <div class="host-actions">
-        <button class="btn-danger btn-sm" data-revoke-host="${escHtml(host)}" data-revoke-token="${escHtml(tok)}">Revoke</button>
+        <button class="btn-danger btn-sm"
+          data-delete-host="${escHtml(host)}"
+          data-delete-type="${escHtml(type)}"
+          data-delete-value="${escHtml(value)}">Revoke</button>
       </div>
     </td>`;
   return tr;
@@ -168,11 +191,36 @@ function renderNewTokenRow(host) {
   return tr;
 }
 
-function renderEmptyRow(host, msg = 'No tokens') {
+function renderNewIPRow(host) {
+  const tr = document.createElement('tr');
+  tr.className = 'row-new-ip';
+  tr.id = `new-ip-row-${cssId(host)}`;
+  tr.dataset.host = host;
+  tr.innerHTML = `
+    <td>
+      <div class="cell-inner">
+        <input class="input-ip" type="text" placeholder="IP address" id="new-ip-addr-${cssId(host)}" />
+      </div>
+    </td>
+    <td>
+      <div class="cell-inner" style="padding-left:0">
+        <input class="input-label" type="text" placeholder="Label (optional)" id="new-ip-label-${cssId(host)}" />
+      </div>
+    </td>
+    <td>
+      <div class="host-actions">
+        <button class="btn-primary btn-sm" data-confirm-ip="${escHtml(host)}">Add</button>
+        <button class="btn-ghost btn-sm" data-cancel-new-ip="${escHtml(host)}">Cancel</button>
+      </div>
+    </td>`;
+  return tr;
+}
+
+function renderEmptyRow(host) {
   const tr = document.createElement('tr');
   tr.className = 'row-empty';
   tr.dataset.host = host;
-  tr.innerHTML = `<td colspan="3"><div class="cell-inner">${escHtml(msg)}</div></td>`;
+  tr.innerHTML = `<td colspan="3"><div class="cell-inner">No credentials</div></td>`;
   return tr;
 }
 
@@ -180,7 +228,7 @@ function renderLoadingRow(host) {
   const tr = document.createElement('tr');
   tr.className = 'row-empty';
   tr.dataset.host = host;
-  tr.innerHTML = `<td colspan="3"><div class="cell-inner"><span class="spinner"></span>&nbsp; Loading tokens…</div></td>`;
+  tr.innerHTML = `<td colspan="3"><div class="cell-inner"><span class="spinner"></span>&nbsp; Loading…</div></td>`;
   return tr;
 }
 
@@ -188,9 +236,10 @@ function renderLoadingRow(host) {
 function insertChildRows(host, rows) {
   const tbody = document.getElementById('tree-body');
   // remove existing children
-  [...tbody.querySelectorAll(`tr[data-host="${CSS.escape(host)}"].row-token,
+  [...tbody.querySelectorAll(`tr[data-host="${CSS.escape(host)}"].row-credential,
                               tr[data-host="${CSS.escape(host)}"].row-empty,
-                              tr[data-host="${CSS.escape(host)}"].row-new-token`)].forEach(r => r.remove());
+                              tr[data-host="${CSS.escape(host)}"].row-new-token,
+                              tr[data-host="${CSS.escape(host)}"].row-new-ip`)].forEach(r => r.remove());
 
   const hostRow = tbody.querySelector(`tr.row-host[data-host="${CSS.escape(host)}"]`);
   let ref = hostRow.nextSibling;
@@ -204,8 +253,8 @@ function updateBadge(host) {
   const s = hostState[host];
   const el = document.getElementById(`badge-${cssId(host)}`);
   if (!el) return;
-  el.textContent = s.loaded ? s.tokens.length : '?';
-  el.className = (s.loaded && s.tokens.length === 0) ? 'badge empty' : 'badge';
+  el.textContent = s.loaded ? s.credentials.length : '?';
+  el.className = (s.loaded && s.credentials.length === 0) ? 'badge empty' : 'badge';
 }
 
 function redrawChildren(host) {
@@ -218,10 +267,10 @@ function redrawChildren(host) {
   if (!s.loaded) {
     rows.push(renderLoadingRow(host));
   } else {
-    for (const { token, label } of s.tokens) {
-      rows.push(renderTokenRow(host, token, label));
+    for (const { type, value, label } of s.credentials) {
+      rows.push(renderCredentialRow(host, type, value, label));
     }
-    if (s.tokens.length === 0) rows.push(renderEmptyRow(host));
+    if (s.credentials.length === 0) rows.push(renderEmptyRow(host));
   }
   insertChildRows(host, rows);
 }
@@ -251,7 +300,7 @@ async function loadHosts() {
 
   // preserve open/loaded state for hosts already known; update accessOpen
   for (const h of hosts) {
-    if (!hostState[h]) hostState[h] = { open: false, loaded: false, tokens: [], accessOpen: null };
+    if (!hostState[h]) hostState[h] = { open: false, loaded: false, credentials: [], accessOpen: null };
     if (h in managedMap) hostState[h].accessOpen = managedMap[h];
   }
 
@@ -267,20 +316,20 @@ async function loadHosts() {
   }
 }
 
-async function loadTokens(host) {
+async function loadCredentials(host) {
   const s = hostState[host];
   s.loaded = false;
   redrawChildren(host);
 
   try {
-    const data = await api({ action: 'tokens', host });
-    s.tokens = data.tokens || [];
+    const data = await api({ action: 'credentials', host });
+    s.credentials = data.credentials || [];
     s.loaded = true;
     if (typeof data.open === 'boolean') s.accessOpen = data.open;
   } catch (e) {
     s.loaded = true;
-    s.tokens = [];
-    toast(`Failed to load tokens for ${host}: ${e.message}`, 'err');
+    s.credentials = [];
+    toast(`Failed to load credentials for ${host}: ${e.message}`, 'err');
   }
 
   updateHostRow(host);
@@ -302,7 +351,7 @@ async function toggleHost(host) {
   }
 
   if (s.open && !s.loaded) {
-    await loadTokens(host);
+    await loadCredentials(host);
   } else {
     redrawChildren(host);
   }
@@ -310,13 +359,12 @@ async function toggleHost(host) {
 
 function showNewTokenRow(host) {
   const s = hostState[host];
-  // open host if not already
   if (!s.open) {
     s.open = true;
     const row = document.querySelector(`tr.row-host[data-host="${CSS.escape(host)}"]`);
     if (row) row.querySelector('.toggle-arrow')?.classList.add('open');
     if (!s.loaded) {
-      loadTokens(host).then(() => appendNewTokenRow(host));
+      loadCredentials(host).then(() => appendNewTokenRow(host));
       return;
     }
   }
@@ -324,13 +372,11 @@ function showNewTokenRow(host) {
 }
 
 function appendNewTokenRow(host) {
-  // don't double-add
   if (document.getElementById(`new-token-row-${cssId(host)}`)) return;
   redrawChildren(host);
   const tbody = document.getElementById('tree-body');
-  // find last child row for this host
   const children = [...tbody.querySelectorAll(
-    `tr[data-host="${CSS.escape(host)}"].row-token, tr[data-host="${CSS.escape(host)}"].row-empty`
+    `tr[data-host="${CSS.escape(host)}"].row-credential, tr[data-host="${CSS.escape(host)}"].row-empty`
   )];
   const insertAfter = children[children.length - 1];
   const newRow = renderNewTokenRow(host);
@@ -342,13 +388,13 @@ function appendNewTokenRow(host) {
   document.getElementById(`new-label-${cssId(host)}`)?.focus();
 }
 
-async function createToken(host) {
+async function createBearer(host) {
   const labelEl = document.getElementById(`new-label-${cssId(host)}`);
   const label = labelEl ? labelEl.value.trim() : '';
   try {
-    const data = await api({ action: 'create' }, { host, label });
+    const data = await api({ action: 'create' }, { host, type: 'bearer', label });
     const s = hostState[host];
-    s.tokens.push({ token: data.token, label: data.label });
+    s.credentials.push({ type: 'bearer', value: data.value, label: data.label });
     if (s.accessOpen === null) { s.accessOpen = false; updateHostRow(host); }
     updateBadge(host);
     redrawChildren(host);
@@ -361,7 +407,7 @@ async function createToken(host) {
 async function setAccess(host, wantOpen) {
   try {
     await api({ action: wantOpen ? 'open' : 'close' }, { host });
-    if (!hostState[host]) hostState[host] = { open: false, loaded: false, tokens: [], accessOpen: null };
+    if (!hostState[host]) hostState[host] = { open: false, loaded: false, credentials: [], accessOpen: null };
     hostState[host].accessOpen = wantOpen;
     updateHostRow(host);
     toast(wantOpen ? `${host}: open access` : `${host}: token required`);
@@ -370,16 +416,67 @@ async function setAccess(host, wantOpen) {
   }
 }
 
-async function revokeToken(host, tok) {
+async function deleteCredential(host, type, value) {
   try {
-    await api({ action: 'delete' }, { host, token: tok });
+    await api({ action: 'delete' }, { host, type, value });
     const s = hostState[host];
-    s.tokens = s.tokens.filter(t => t.token !== tok);
+    s.credentials = s.credentials.filter(c => !(c.type === type && c.value === value));
     updateBadge(host);
     redrawChildren(host);
-    toast(`Token revoked`);
+    toast(type === 'ip' ? `IP ${value} removed` : `Token revoked`);
   } catch (e) {
-    toast(`Revoke failed: ${e.message}`, 'err');
+    toast(`Delete failed: ${e.message}`, 'err');
+  }
+}
+
+function showNewIPRow(host) {
+  const s = hostState[host];
+  if (!s.open) {
+    s.open = true;
+    const row = document.querySelector(`tr.row-host[data-host="${CSS.escape(host)}"]`);
+    if (row) row.querySelector('.toggle-arrow')?.classList.add('open');
+    if (!s.loaded) {
+      loadCredentials(host).then(() => appendNewIPRow(host));
+      return;
+    }
+  }
+  appendNewIPRow(host);
+}
+
+function appendNewIPRow(host) {
+  if (document.getElementById(`new-ip-row-${cssId(host)}`)) return;
+  redrawChildren(host);
+  const tbody = document.getElementById('tree-body');
+  const children = [...tbody.querySelectorAll(
+    `tr[data-host="${CSS.escape(host)}"].row-credential, tr[data-host="${CSS.escape(host)}"].row-empty`
+  )];
+  const insertAfter = children[children.length - 1];
+  const newRow = renderNewIPRow(host);
+  if (insertAfter) insertAfter.after(newRow);
+  else {
+    const hostRow = tbody.querySelector(`tr.row-host[data-host="${CSS.escape(host)}"]`);
+    hostRow.after(newRow);
+  }
+  document.getElementById(`new-ip-addr-${cssId(host)}`)?.focus();
+}
+
+async function createIP(host) {
+  const addrEl = document.getElementById(`new-ip-addr-${cssId(host)}`);
+  const labelEl = document.getElementById(`new-ip-label-${cssId(host)}`);
+  const value = addrEl ? addrEl.value.trim() : '';
+  const label = labelEl ? labelEl.value.trim() : '';
+  if (!value) { toast('IP address required', 'err'); return; }
+  try {
+    const data = await api({ action: 'create' }, { host, type: 'ip', value, label });
+    const s = hostState[host];
+    s.credentials = s.credentials.filter(c => !(c.type === 'ip' && c.value === data.value));
+    s.credentials.push({ type: 'ip', value: data.value, label: data.label });
+    if (s.accessOpen === null) { s.accessOpen = false; updateHostRow(host); }
+    updateBadge(host);
+    redrawChildren(host);
+    toast(`IP ${data.value} added for ${host}`);
+  } catch (e) {
+    toast(`Add IP failed: ${e.message}`, 'err');
   }
 }
 
@@ -388,22 +485,29 @@ document.getElementById('tree-body').addEventListener('click', async e => {
   const btn = e.target.closest('button, [data-toggle]');
   if (!btn) return;
 
-  if (btn.dataset.toggle)         return toggleHost(btn.dataset.toggle);
-  if (btn.dataset.setAccess)      return setAccess(btn.dataset.setAccess, btn.dataset.wantOpen === 'true');
-  if (btn.dataset.newToken)       return showNewTokenRow(btn.dataset.newToken);
-  if (btn.dataset.confirmCreate)  return createToken(btn.dataset.confirmCreate);
+  if (btn.dataset.toggle)        return toggleHost(btn.dataset.toggle);
+  if (btn.dataset.setAccess)     return setAccess(btn.dataset.setAccess, btn.dataset.wantOpen === 'true');
+  if (btn.dataset.newToken)      return showNewTokenRow(btn.dataset.newToken);
+  if (btn.dataset.confirmCreate) return createBearer(btn.dataset.confirmCreate);
   if (btn.dataset.cancelNew) {
     document.getElementById(`new-token-row-${cssId(btn.dataset.cancelNew)}`)?.remove();
     return;
   }
-  if (btn.dataset.revokeToken)    return revokeToken(btn.dataset.revokeHost, btn.dataset.revokeToken);
+  if (btn.dataset.deleteValue)   return deleteCredential(btn.dataset.deleteHost, btn.dataset.deleteType, btn.dataset.deleteValue);
+  if (btn.dataset.newIp)         return showNewIPRow(btn.dataset.newIp);
+  if (btn.dataset.confirmIp)     return createIP(btn.dataset.confirmIp);
+  if (btn.dataset.cancelNewIp) {
+    document.getElementById(`new-ip-row-${cssId(btn.dataset.cancelNewIp)}`)?.remove();
+    return;
+  }
 });
 
 document.getElementById('tree-body').addEventListener('keydown', e => {
   if (e.key !== 'Enter') return;
-  const row = e.target.closest('.row-new-token');
-  if (!row) return;
-  createToken(row.dataset.host);
+  const tokenRow = e.target.closest('.row-new-token');
+  if (tokenRow) { createBearer(tokenRow.dataset.host); return; }
+  const ipRow = e.target.closest('.row-new-ip');
+  if (ipRow) createIP(ipRow.dataset.host);
 });
 
 document.getElementById('refresh-btn').addEventListener('click', loadHosts);

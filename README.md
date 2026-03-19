@@ -6,9 +6,10 @@ Bearer token authentication for Apache virtual hosts. No daemons, no databases, 
 
 Each request is checked by a static Apache fragment (`token-auth.conf`) included in the vhost config:
 
-1. If `tokens/<host>/.open` exists → allow (open access mode)
-2. If `Authorization: Bearer <token>` matches a file at `tokens/<host>/<token>` → allow
-3. Otherwise → 403
+1. If `tokens/<host>/OPEN` exists → allow (open access mode)
+2. If `tokens/<host>/IP/<remote-ip>` exists → allow (IP allowlist)
+3. If `Authorization: Bearer <token>` matches a file at `tokens/<host>/<token>` → allow
+4. Otherwise → 403
 
 Token validation is a filesystem `stat` — no process is spawned, no reload needed for token changes.
 
@@ -29,6 +30,9 @@ Token validation is a filesystem `stat` — no process is spawned, no reload nee
         api.example.com/
             a3f9...           # Token file — filename is the token, content is the label
             OPEN              # Sentinel: present = open access, absent = token required
+            IP/
+                192.168.1.1   # Allowed IP — filename is the address, content is the label
+                ::1           # IPv6 addresses are supported
         app.example.com/
             7c2b...
     apache/
@@ -67,6 +71,9 @@ All requests require `Authorization: Bearer <master-token>`.
 | `POST` | `delete` | `host=...&token=...` | `{"status":"deleted"}` |
 | `POST` | `open` | `host=...` | `{"status":"open"}` |
 | `POST` | `close` | `host=...` | `{"status":"closed"}` |
+| `GET` | `ip-list` | `host=...` | `{"host":"...","ips":[{"ip":"...","label":"..."},...]}` |
+| `POST` | `ip-add` | `host=...&ip=...&label=...` | `{"ip":"...","label":"..."}` |
+| `POST` | `ip-remove` | `host=...&ip=...` | `{"status":"deleted"}` |
 
 Example:
 
@@ -99,11 +106,12 @@ Switching states is instant (filesystem operation, no Apache reload).
 ## Security notes
 
 - **Constant-time comparison** for master token authentication (prevents timing attacks).
-- **Path traversal protection** — `SERVER_NAME` is validated against an allowlist regex before use in filesystem paths.
+- **Path traversal protection** — `SERVER_NAME` is validated against an allowlist regex before use in filesystem paths. `REMOTE_ADDR` is validated to contain only IP characters (`[0-9a-fA-F:.]`) before use in a filesystem path — no slash or dot-dot traversal is possible.
 - **Hardcoded `PATH`** in CGI context — prevents environment variable injection by a compromised Apache worker.
-- **`umask 027`** — token files are `640` (root:www-data), not world-readable.
-- **Atomic token writes** — `mktemp` + `mv` prevents partial token files being live.
+- **`umask 027`** — token and IP files are `640` (root:www-data), not world-readable.
+- **Atomic writes** — `mktemp` + `mv` prevents partial token or IP files from going live mid-write.
 - Tokens are 32 hex characters (128-bit entropy from `/dev/urandom`).
+- IP allowlist entries use the raw `REMOTE_ADDR` as the filename — no DNS lookup, no spoofing via hostname.
 - **Suexec isolation** — for stronger separation, run the CGI under a dedicated user rather than the shared `www-data` process, so a compromised web app cannot read the master token or manipulate the token store:
   ```apache
   SuexecUserGroup token-admin token-admin
@@ -151,7 +159,7 @@ sudo cat /etc/apache-token-auth/master.token
 bash test.sh
 ```
 
-119 tests covering token lifecycle, open/close transitions, path traversal rejection, timing-safe auth, and CGI input validation.
+149 tests covering token lifecycle, IP allowlist lifecycle, open/close transitions, path traversal rejection, timing-safe auth, and CGI input validation.
 
 ## Dependencies
 

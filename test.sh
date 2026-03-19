@@ -161,13 +161,13 @@ CompareArgs "$(cgi_status HTTP_AUTHORIZATION="Bearer ${prefix}" QUERY_STRING=act
 
 Test "params: duplicate key uses first occurrence"
 # If pollution worked, second host= value would override the first
-result=$(cgi_status "$auth" QUERY_STRING="action=tokens&host=nonexistent.com&host=../../etc")
+result=$(cgi_status "$auth" QUERY_STRING="action=credentials&host=nonexistent.com&host=../../etc")
 # Should be 404 (nonexistent.com), not 400 (traversal) or 200
 CompareArgs "$result" "404"
 
 Test "params: substring key does not match (ahost != host)"
 # ahost=value should not be parsed as host=value
-result=$(cgi_status "$auth" QUERY_STRING="action=tokens&ahost=example.com")
+result=$(cgi_status "$auth" QUERY_STRING="action=credentials&ahost=example.com")
 CompareArgs "$result" "400"
 
 # ── ui serving (no action) ─────────────────────────────────────────────────
@@ -268,7 +268,7 @@ printf 'ci token' > "$TOKEN_ROOT/api.example.com/11223344aabbccdd11223344aabbccd
 
 Test "json: double-quote in label is escaped"
 printf 'say "hello"' > "$TOKEN_ROOT/example.com/aabbccdd11223344aabbccdd11223344"
-result=$(cgi "$auth" QUERY_STRING="action=tokens&host=example.com")
+result=$(cgi "$auth" QUERY_STRING="action=credentials&host=example.com")
 case "$result" in
     *'\"hello\"'*) Pass ;;
     *)             Fail ;;
@@ -276,7 +276,7 @@ esac
 
 Test "json: backslash in label is escaped"
 printf 'path\\value' > "$TOKEN_ROOT/example.com/aabbccdd11223344aabbccdd11223344"
-result=$(cgi "$auth" QUERY_STRING="action=tokens&host=example.com")
+result=$(cgi "$auth" QUERY_STRING="action=credentials&host=example.com")
 case "$result" in
     *'path\\value'*) Pass ;;
     *)               Fail ;;
@@ -287,7 +287,7 @@ printf 'my label' > "$TOKEN_ROOT/example.com/aabbccdd11223344aabbccdd11223344"
 Test "json: newline in label is stripped before storage"
 result=$(printf 'host=example.com&label=line1%0aline2' | \
     cgi "$auth" QUERY_STRING=action=create REQUEST_METHOD=POST)
-tok=$(printf '%s' "$result" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+tok=$(printf '%s' "$result" | sed -n 's/.*"value":"\([^"]*\)".*/\1/p')
 stored=$(cat "$TOKEN_ROOT/example.com/$tok" 2>/dev/null)
 case "$stored" in
     *$'\n'*) Fail ;;
@@ -297,7 +297,7 @@ esac
 Test "json: control chars in label stripped before storage"
 result=$(echo 'host=example.com&label=hello%01world' | \
     cgi "$auth" QUERY_STRING=action=create REQUEST_METHOD=POST)
-tok=$(printf '%s' "$result" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+tok=$(printf '%s' "$result" | sed -n 's/.*"value":"\([^"]*\)".*/\1/p')
 stored=$(cat "$TOKEN_ROOT/example.com/$tok" 2>/dev/null)
 CompareArgs "$stored" "helloworld"
 
@@ -328,75 +328,94 @@ case "$result" in *'"example.com"'*)     tok1_found=1 ;; esac
 case "$result" in *'"api.example.com"'*) tok2_found=1 ;; esac
 if [ $tok1_found -eq 1 ] && [ $tok2_found -eq 1 ]; then Pass; else Fail; fi
 
-# ── tokens ─────────────────────────────────────────────────────────────────
+# ── credentials ────────────────────────────────────────────────────────────
 
-Test "tokens: returns token and label for host"
-result=$(cgi "$auth" QUERY_STRING="action=tokens&host=example.com")
-found_tok=0; found_label=0
+Test "credentials: returns bearer token and label for host"
+result=$(cgi "$auth" QUERY_STRING="action=credentials&host=example.com")
+found_tok=0; found_label=0; found_type=0
 case "$result" in *'"aabbccdd11223344aabbccdd11223344"'*) found_tok=1   ;; esac
 case "$result" in *'"my label"'*)                        found_label=1 ;; esac
-if [ $found_tok -eq 1 ] && [ $found_label -eq 1 ]; then Pass; else Fail; fi
+case "$result" in *'"type":"bearer"'*)                   found_type=1  ;; esac
+if [ $found_tok -eq 1 ] && [ $found_label -eq 1 ] && [ $found_type -eq 1 ]; then Pass; else Fail; fi
 
-Test "tokens: returns multiple tokens for host"
+Test "credentials: returns multiple bearer tokens for host"
 printf 'second label' > "$TOKEN_ROOT/example.com/bbccdd1122334455bbccdd1122334455"
-result=$(cgi "$auth" QUERY_STRING="action=tokens&host=example.com")
+result=$(cgi "$auth" QUERY_STRING="action=credentials&host=example.com")
 tok1_found=0; tok2_found=0
 case "$result" in *aabbccdd11223344aabbccdd11223344*) tok1_found=1 ;; esac
 case "$result" in *bbccdd1122334455bbccdd1122334455*) tok2_found=1 ;; esac
 if [ $tok1_found -eq 1 ] && [ $tok2_found -eq 1 ]; then Pass; else Fail; fi
 rm -f "$TOKEN_ROOT/example.com/bbccdd1122334455bbccdd1122334455"
 
-Test "tokens: empty array for host dir with no token files"
+Test "credentials: empty array for host dir with no credential files"
 mkdir -p "$TOKEN_ROOT/empty.example.com"
-CompareArgs "$(cgi "$auth" QUERY_STRING="action=tokens&host=empty.example.com")" \
-            '{"host":"empty.example.com","open":false,"tokens":[]}'
+CompareArgs "$(cgi "$auth" QUERY_STRING="action=credentials&host=empty.example.com")" \
+            '{"host":"empty.example.com","open":false,"credentials":[]}'
 
-Test "tokens: token with empty label"
+Test "credentials: token with empty label"
 printf '' > "$TOKEN_ROOT/example.com/000000000000000000000000000000aa"
-result=$(cgi "$auth" QUERY_STRING="action=tokens&host=example.com")
+result=$(cgi "$auth" QUERY_STRING="action=credentials&host=example.com")
 case "$result" in
     *'"000000000000000000000000000000aa"'*) Pass ;;
     *) Fail ;;
 esac
 rm -f "$TOKEN_ROOT/example.com/000000000000000000000000000000aa"
 
-Test "tokens: non-token files in dir are skipped"
-# create a file whose name is not a valid 32-hex-char token
+Test "credentials: non-token files in dir are skipped"
 printf 'junk' > "$TOKEN_ROOT/example.com/not-a-token"
-result=$(cgi "$auth" QUERY_STRING="action=tokens&host=example.com")
+result=$(cgi "$auth" QUERY_STRING="action=credentials&host=example.com")
 case "$result" in
     *'"not-a-token"'*) Fail ;;
     *)                 Pass ;;
 esac
 rm -f "$TOKEN_ROOT/example.com/not-a-token"
 
-Test "tokens: 404 for unknown host"
-CompareArgs "$(cgi_status "$auth" QUERY_STRING="action=tokens&host=unknown.com")" "404"
+Test "credentials: 404 for unknown host"
+CompareArgs "$(cgi_status "$auth" QUERY_STRING="action=credentials&host=unknown.com")" "404"
 
-Test "tokens: 400 for path traversal in host"
-CompareArgs "$(cgi_status "$auth" QUERY_STRING="action=tokens&host=../../etc")" "400"
+Test "credentials: 400 for path traversal in host"
+CompareArgs "$(cgi_status "$auth" QUERY_STRING="action=credentials&host=../../etc")" "400"
 
-Test "tokens: 400 for empty host"
-CompareArgs "$(cgi_status "$auth" QUERY_STRING="action=tokens&host=")" "400"
+Test "credentials: 400 for empty host"
+CompareArgs "$(cgi_status "$auth" QUERY_STRING="action=credentials&host=")" "400"
+
+Test "credentials: IP entries appear with type=ip"
+mkdir -p "$TOKEN_ROOT/example.com/IP"
+printf 'office' > "$TOKEN_ROOT/example.com/IP/10.0.0.1"
+result=$(cgi "$auth" QUERY_STRING="action=credentials&host=example.com")
+found_ip=0; found_type=0
+case "$result" in *'"10.0.0.1"'*)     found_ip=1   ;; esac
+case "$result" in *'"type":"ip"'*)    found_type=1 ;; esac
+rm -f "$TOKEN_ROOT/example.com/IP/10.0.0.1"
+rmdir "$TOKEN_ROOT/example.com/IP"
+if [ $found_ip -eq 1 ] && [ $found_type -eq 1 ]; then Pass; else Fail; fi
 
 # ── create ─────────────────────────────────────────────────────────────────
 
-Test "create: generates token file with label"
-result=$(printf 'host=example.com&label=test+token' | \
+Test "create: generates bearer token file with label"
+result=$(printf 'host=example.com&type=bearer&label=test+token' | \
     cgi "$auth" QUERY_STRING=action=create REQUEST_METHOD=POST)
 case "$result" in
-    '{"token":"'*'"label":"test token"}'*)
-        tok=$(printf '%s' "$result" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+    '{"type":"bearer","value":"'*'"label":"test token"}'*)
+        tok=$(printf '%s' "$result" | sed -n 's/.*"value":"\([^"]*\)".*/\1/p')
         if [ -f "$TOKEN_ROOT/example.com/$tok" ]; then Pass
         else Fail
         fi ;;
     *) Fail ;;
 esac
 
-Test "create: token is 32 lowercase hex characters"
-result=$(printf 'host=example.com&label=fmt' | \
+Test "create: type defaults to bearer when absent"
+result=$(printf 'host=example.com&label=default-type' | \
     cgi "$auth" QUERY_STRING=action=create REQUEST_METHOD=POST)
-tok=$(printf '%s' "$result" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+case "$result" in
+    *'"type":"bearer"'*) Pass ;;
+    *)                   Fail ;;
+esac
+
+Test "create: token is 32 lowercase hex characters"
+result=$(printf 'host=example.com&type=bearer&label=fmt' | \
+    cgi "$auth" QUERY_STRING=action=create REQUEST_METHOD=POST)
+tok=$(printf '%s' "$result" | sed -n 's/.*"value":"\([^"]*\)".*/\1/p')
 if [ "${#tok}" -eq 32 ]; then
     case "$tok" in
         *[!0-9a-f]*) Fail ;;
@@ -406,31 +425,57 @@ else Fail
 fi
 
 Test "create: two tokens are unique"
-tok1=$(printf 'host=example.com&label=a' | \
+tok1=$(printf 'host=example.com&type=bearer&label=a' | \
     cgi "$auth" QUERY_STRING=action=create REQUEST_METHOD=POST | \
-    sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
-tok2=$(printf 'host=example.com&label=b' | \
+    sed -n 's/.*"value":"\([^"]*\)".*/\1/p')
+tok2=$(printf 'host=example.com&type=bearer&label=b' | \
     cgi "$auth" QUERY_STRING=action=create REQUEST_METHOD=POST | \
-    sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+    sed -n 's/.*"value":"\([^"]*\)".*/\1/p')
 if [ "$tok1" != "$tok2" ]; then Pass; else Fail; fi
 
 Test "create: label stored in token file"
-result=$(printf 'host=example.com&label=stored+label' | \
+result=$(printf 'host=example.com&type=bearer&label=stored+label' | \
     cgi "$auth" QUERY_STRING=action=create REQUEST_METHOD=POST)
-tok=$(printf '%s' "$result" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+tok=$(printf '%s' "$result" | sed -n 's/.*"value":"\([^"]*\)".*/\1/p')
 CompareArgs "$(cat "$TOKEN_ROOT/example.com/$tok" 2>/dev/null)" "stored label"
 
 Test "create: empty label is accepted"
-result=$(printf 'host=example.com&label=' | \
+result=$(printf 'host=example.com&type=bearer&label=' | \
     cgi "$auth" QUERY_STRING=action=create REQUEST_METHOD=POST)
-tok=$(printf '%s' "$result" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+tok=$(printf '%s' "$result" | sed -n 's/.*"value":"\([^"]*\)".*/\1/p')
 if [ -f "$TOKEN_ROOT/example.com/$tok" ]; then Pass; else Fail; fi
 
 Test "create: missing label field is accepted"
-result=$(printf 'host=example.com' | \
+result=$(printf 'host=example.com&type=bearer' | \
     cgi "$auth" QUERY_STRING=action=create REQUEST_METHOD=POST)
-tok=$(printf '%s' "$result" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+tok=$(printf '%s' "$result" | sed -n 's/.*"value":"\([^"]*\)".*/\1/p')
 if [ -f "$TOKEN_ROOT/example.com/$tok" ]; then Pass; else Fail; fi
+
+Test "create: type=ip creates IP file"
+result=$(printf 'host=example.com&type=ip&value=10.0.0.1&label=office' | \
+    cgi "$auth" QUERY_STRING=action=create REQUEST_METHOD=POST)
+case "$result" in
+    '{"type":"ip","value":"10.0.0.1","label":"office"}') Pass ;;
+    *)                                                    Fail ;;
+esac
+
+Test "create: type=ip file exists on disk"
+if [ -f "$TOKEN_ROOT/example.com/IP/10.0.0.1" ]; then Pass; else Fail; fi
+
+Test "create: type=ip 400 for invalid ip"
+CompareArgs \
+    "$(cgi_status "$auth" QUERY_STRING=action=create REQUEST_METHOD=POST <<< 'host=example.com&type=ip&value=not/valid')" \
+    "400"
+
+Test "create: type=ip 400 for empty value"
+CompareArgs \
+    "$(cgi_status "$auth" QUERY_STRING=action=create REQUEST_METHOD=POST <<< 'host=example.com&type=ip&value=')" \
+    "400"
+
+Test "create: 400 for invalid type"
+CompareArgs \
+    "$(cgi_status "$auth" QUERY_STRING=action=create REQUEST_METHOD=POST <<< 'host=example.com&type=ftp&label=x')" \
+    "400"
 
 Test "create: 400 for path traversal in host"
 CompareArgs \
@@ -449,46 +494,84 @@ if [ -d "$TOKEN_ROOT/newhost.com" ]; then Pass; else Fail; fi
 
 # ── delete ─────────────────────────────────────────────────────────────────
 
-Test "delete: removes token file"
+Test "delete: removes bearer token file"
 printf 'deleteme' > "$TOKEN_ROOT/example.com/deadbeefdeadbeefdeadbeefdeadbeef"
-printf 'host=example.com&token=deadbeefdeadbeefdeadbeefdeadbeef' | \
+printf 'host=example.com&type=bearer&value=deadbeefdeadbeefdeadbeefdeadbeef' | \
     cgi "$auth" QUERY_STRING=action=delete REQUEST_METHOD=POST > /dev/null
 if [ ! -f "$TOKEN_ROOT/example.com/deadbeefdeadbeefdeadbeefdeadbeef" ]; then Pass; else Fail; fi
 
 Test "delete: returns deleted status"
 printf 'deletelabel' > "$TOKEN_ROOT/example.com/cafebabecafebabecafebabecafebabe"
-result=$(printf 'host=example.com&token=cafebabecafebabecafebabecafebabe' | \
+result=$(printf 'host=example.com&type=bearer&value=cafebabecafebabecafebabecafebabe' | \
     cgi "$auth" QUERY_STRING=action=delete REQUEST_METHOD=POST)
 CompareArgs "$result" '{"status":"deleted"}'
 
-Test "delete: 400 for path traversal in token"
+Test "delete: type defaults to bearer when absent"
+printf 'label' > "$TOKEN_ROOT/example.com/ffffffffffffffffffffffffffffffff"
+result=$(printf 'host=example.com&value=ffffffffffffffffffffffffffffffff' | \
+    cgi "$auth" QUERY_STRING=action=delete REQUEST_METHOD=POST)
+CompareArgs "$result" '{"status":"deleted"}'
+
+Test "delete: 400 for path traversal in bearer value"
 CompareArgs \
-    "$(cgi_status "$auth" QUERY_STRING=action=delete REQUEST_METHOD=POST <<< 'host=example.com&token=../../etc/passwd')" \
+    "$(cgi_status "$auth" QUERY_STRING=action=delete REQUEST_METHOD=POST <<< 'host=example.com&type=bearer&value=../../etc/passwd')" \
     "400"
 
 Test "delete: 400 for path traversal in host"
 CompareArgs \
-    "$(cgi_status "$auth" QUERY_STRING=action=delete REQUEST_METHOD=POST <<< 'host=../../etc&token=cafebabecafebabecafebabecafebabe')" \
+    "$(cgi_status "$auth" QUERY_STRING=action=delete REQUEST_METHOD=POST <<< 'host=../../etc&type=bearer&value=cafebabecafebabecafebabecafebabe')" \
     "400"
 
-Test "delete: non-existent token is silent"
-result=$(printf 'host=example.com&token=0000000000000000000000000000ffff' | \
+Test "delete: non-existent bearer token is silent"
+result=$(printf 'host=example.com&type=bearer&value=0000000000000000000000000000ffff' | \
     cgi "$auth" QUERY_STRING=action=delete REQUEST_METHOD=POST)
 CompareArgs "$result" '{"status":"deleted"}'
 
 Test "delete: 400 for empty host"
 CompareArgs \
-    "$(cgi_status "$auth" QUERY_STRING=action=delete REQUEST_METHOD=POST <<< 'host=&token=cafebabecafebabecafebabecafebabe')" \
+    "$(cgi_status "$auth" QUERY_STRING=action=delete REQUEST_METHOD=POST <<< 'host=&type=bearer&value=cafebabecafebabecafebabecafebabe')" \
     "400"
 
-Test "delete: 400 for empty token"
+Test "delete: 400 for empty bearer value"
 CompareArgs \
-    "$(cgi_status "$auth" QUERY_STRING=action=delete REQUEST_METHOD=POST <<< 'host=example.com&token=')" \
+    "$(cgi_status "$auth" QUERY_STRING=action=delete REQUEST_METHOD=POST <<< 'host=example.com&type=bearer&value=')" \
     "400"
 
-Test "delete: 400 for non-hex token (rejects non-token filenames)"
+Test "delete: 400 for non-hex bearer value"
 CompareArgs \
-    "$(cgi_status "$auth" QUERY_STRING=action=delete REQUEST_METHOD=POST <<< 'host=example.com&token=not-a-valid-token-string-here')" \
+    "$(cgi_status "$auth" QUERY_STRING=action=delete REQUEST_METHOD=POST <<< 'host=example.com&type=bearer&value=not-a-valid-token-string-here')" \
+    "400"
+
+Test "delete: type=ip removes IP file"
+printf 'office' > "$TOKEN_ROOT/example.com/IP/10.0.0.1"
+printf 'host=example.com&type=ip&value=10.0.0.1' | \
+    cgi "$auth" QUERY_STRING=action=delete REQUEST_METHOD=POST > /dev/null
+if [ ! -f "$TOKEN_ROOT/example.com/IP/10.0.0.1" ]; then Pass; else Fail; fi
+
+Test "delete: type=ip returns deleted status"
+printf 'label' > "$TOKEN_ROOT/example.com/IP/10.0.0.9"
+result=$(printf 'host=example.com&type=ip&value=10.0.0.9' | \
+    cgi "$auth" QUERY_STRING=action=delete REQUEST_METHOD=POST)
+CompareArgs "$result" '{"status":"deleted"}'
+
+Test "delete: type=ip non-existent IP is silent"
+result=$(printf 'host=example.com&type=ip&value=10.0.0.99' | \
+    cgi "$auth" QUERY_STRING=action=delete REQUEST_METHOD=POST)
+CompareArgs "$result" '{"status":"deleted"}'
+
+Test "delete: type=ip 400 for invalid ip"
+CompareArgs \
+    "$(cgi_status "$auth" QUERY_STRING=action=delete REQUEST_METHOD=POST <<< 'host=example.com&type=ip&value=not/valid')" \
+    "400"
+
+Test "delete: type=ip 400 for empty value"
+CompareArgs \
+    "$(cgi_status "$auth" QUERY_STRING=action=delete REQUEST_METHOD=POST <<< 'host=example.com&type=ip&value=')" \
+    "400"
+
+Test "delete: 400 for invalid type"
+CompareArgs \
+    "$(cgi_status "$auth" QUERY_STRING=action=delete REQUEST_METHOD=POST <<< 'host=example.com&type=ftp&value=anything')" \
     "400"
 
 # ── css/js: full security header set ──────────────────────────────────────
@@ -538,7 +621,7 @@ CompareArgs "$result" "403"
 Test "create: token file is created with correct label"
 result=$(printf 'host=example.com&label=atomic+test' | \
     cgi "$auth" QUERY_STRING=action=create REQUEST_METHOD=POST)
-tok=$(printf '%s' "$result" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+tok=$(printf '%s' "$result" | sed -n 's/.*"value":"\([^"]*\)".*/\1/p')
 CompareArgs "$(cat "$TOKEN_ROOT/example.com/$tok" 2>/dev/null)" "atomic test"
 
 Test "create: no stale tmp files left after successful create"
@@ -572,7 +655,7 @@ CompareArgs "$result" "400"
 Test "tokens: symlinks in token dir are skipped"
 mkdir -p "$TOKEN_ROOT/example.com"
 ln -sf /etc/hostname "$TOKEN_ROOT/example.com/ccddaabb11223344ccddaabb11223344"
-result=$(cgi "$auth" QUERY_STRING="action=tokens&host=example.com")
+result=$(cgi "$auth" QUERY_STRING="action=credentials&host=example.com")
 rm -f "$TOKEN_ROOT/example.com/ccddaabb11223344ccddaabb11223344"
 case "$result" in
     *'"ccddaabb11223344ccddaabb11223344"'*) Fail ;;
@@ -584,7 +667,7 @@ esac
 Test "tokens: label truncated to 256 chars on read"
 big_label=$(printf 'x%.0s' {1..500})
 printf '%s' "$big_label" > "$TOKEN_ROOT/example.com/aabbccdd11223344aabbccdd11223300"
-result=$(cgi "$auth" QUERY_STRING="action=tokens&host=example.com")
+result=$(cgi "$auth" QUERY_STRING="action=credentials&host=example.com")
 rm -f "$TOKEN_ROOT/example.com/aabbccdd11223344aabbccdd11223300"
 # Extract label value from JSON result and verify length <= 256
 label_val=$(printf '%s' "$result" | sed -n 's/.*"label":"\([^"]*\)".*/\1/p' | head -1)
@@ -659,7 +742,7 @@ Test "delete: rm failure returns 500"
 mkdir -p "$TOKEN_ROOT/readonly.example.com"
 printf 'label' > "$TOKEN_ROOT/readonly.example.com/aabbccdd11223344aabbccdd11223300"
 chmod 555 "$TOKEN_ROOT/readonly.example.com"
-result=$(printf 'host=readonly.example.com&token=aabbccdd11223344aabbccdd11223300' | \
+result=$(printf 'host=readonly.example.com&type=bearer&value=aabbccdd11223344aabbccdd11223300' | \
     cgi_status "$auth" QUERY_STRING=action=delete REQUEST_METHOD=POST)
 chmod 755 "$TOKEN_ROOT/readonly.example.com"
 rm -rf "$TOKEN_ROOT/readonly.example.com"
@@ -696,7 +779,7 @@ Test "url: malformed percent sequence is stripped (not passed through)"
 # %zz is not a valid %XX sequence; urldecode should not pass the bare % through.
 result=$(printf 'host=example.com&label=bad%%zztag' | \
     cgi "$auth" QUERY_STRING=action=create REQUEST_METHOD=POST)
-tok=$(printf '%s' "$result" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+tok=$(printf '%s' "$result" | sed -n 's/.*"value":"\([^"]*\)".*/\1/p')
 stored=$(cat "$TOKEN_ROOT/example.com/$tok" 2>/dev/null)
 case "$stored" in
     *'%'*) Fail ;;
@@ -706,17 +789,17 @@ esac
 Test "url: plus decoded to space in label"
 result=$(printf 'host=example.com&label=hello+world' | \
     cgi "$auth" QUERY_STRING=action=create REQUEST_METHOD=POST)
-tok=$(printf '%s' "$result" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+tok=$(printf '%s' "$result" | sed -n 's/.*"value":"\([^"]*\)".*/\1/p')
 CompareArgs "$(cat "$TOKEN_ROOT/example.com/$tok" 2>/dev/null)" "hello world"
 
 Test "url: percent-encoded label decoded correctly"
 result=$(echo 'host=example.com&label=hello%20world' | \
     cgi "$auth" QUERY_STRING=action=create REQUEST_METHOD=POST)
-tok=$(printf '%s' "$result" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+tok=$(printf '%s' "$result" | sed -n 's/.*"value":"\([^"]*\)".*/\1/p')
 CompareArgs "$(cat "$TOKEN_ROOT/example.com/$tok" 2>/dev/null)" "hello world"
 
 Test "url: percent-encoded host decoded correctly"
-result=$(cgi "$auth" QUERY_STRING="action=tokens&host=example.com")
+result=$(cgi "$auth" QUERY_STRING="action=credentials&host=example.com")
 case "$result" in
     '{"host":"example.com"'*) Pass ;;
     *)                        Fail ;;
@@ -730,11 +813,11 @@ CompareArgs "$(cgi_status "$auth" QUERY_STRING="action=ho%73ts")" "400"
 # ── valid_host: consecutive dots rejected ─────────────────────────────────
 
 Test "valid_host: consecutive dots in host are rejected"
-CompareArgs "$(cgi_status "$auth" QUERY_STRING="action=tokens&host=a..b.com")" "400"
+CompareArgs "$(cgi_status "$auth" QUERY_STRING="action=credentials&host=a..b.com")" "400"
 
 Test "valid_host: single dots are allowed"
 # example.com is not in TOKEN_ROOT yet from this path — expect 404, not 400
-CompareArgs "$(cgi_status "$auth" QUERY_STRING="action=tokens&host=sub.example.com")" "404"
+CompareArgs "$(cgi_status "$auth" QUERY_STRING="action=credentials&host=sub.example.com")" "404"
 
 # ── list: invalid directory names skipped ─────────────────────────────────
 
@@ -768,22 +851,22 @@ CompareArgs "$result" "500"
 
 # ── http status codes are correct (not buried in body) ────────────────────
 
-Test "status: 400 for invalid host in tokens is real HTTP status"
+Test "status: 400 for invalid host in credentials is real HTTP status"
 # Previously json_headers ran before case dispatch, so Status: appeared in
 # the body and HTTP status was always 200. Verify the status line comes first.
 out=$(env TOKEN_ROOT="$TOKEN_ROOT" MASTER_TOKEN_FILE="$MASTER_TOKEN_FILE" \
     SCRIPT_DIR="$SCRIPT_DIR" PATH="$FAKE_BIN:$PATH" HTTPS=on \
-    "$auth" QUERY_STRING="action=tokens&host=../../etc" bash "$CGI" 2>/dev/null)
+    "$auth" QUERY_STRING="action=credentials&host=../../etc" bash "$CGI" 2>/dev/null)
 first_line=$(printf '%s' "$out" | head -1)
 case "$first_line" in
     'Status: 400') Pass ;;
     *)             Fail ;;
 esac
 
-Test "status: 404 for missing host in tokens is real HTTP status"
+Test "status: 404 for missing host in credentials is real HTTP status"
 out=$(env TOKEN_ROOT="$TOKEN_ROOT" MASTER_TOKEN_FILE="$MASTER_TOKEN_FILE" \
     SCRIPT_DIR="$SCRIPT_DIR" PATH="$FAKE_BIN:$PATH" HTTPS=on \
-    "$auth" QUERY_STRING="action=tokens&host=missing.example.com" bash "$CGI" 2>/dev/null)
+    "$auth" QUERY_STRING="action=credentials&host=missing.example.com" bash "$CGI" 2>/dev/null)
 first_line=$(printf '%s' "$out" | head -1)
 case "$first_line" in
     'Status: 404') Pass ;;
@@ -838,11 +921,11 @@ esac
 
 Test "create: label exactly 256 chars is accepted"
 label256=$(printf 'x%.0s' {1..256})
-result=$(printf 'host=example.com&label=%s' "$label256" | \
+result=$(printf 'host=example.com&type=bearer&label=%s' "$label256" | \
     cgi "$auth" QUERY_STRING=action=create REQUEST_METHOD=POST)
 case "$result" in
-    *'"token"'*) Pass ;;
-    *)           Fail ;;
+    *'"type":"bearer"'*) Pass ;;
+    *)                   Fail ;;
 esac
 
 # ── json_error message escaping ────────────────────────────────────────────
@@ -925,31 +1008,31 @@ CompareArgs \
     "$(cgi_status "$auth" QUERY_STRING=action=close REQUEST_METHOD=POST <<< 'host=')" \
     "400"
 
-# ── open/close: OPEN sentinel excluded from token listing ──────────────────
+# ── open/close: OPEN sentinel excluded from credential listing ─────────────
 
-Test "tokens: OPEN sentinel file is not listed as a token"
+Test "credentials: OPEN sentinel file is not listed as a credential"
 printf 'host=open.example.com' | \
     cgi "$auth" QUERY_STRING=action=open REQUEST_METHOD=POST > /dev/null
-result=$(cgi "$auth" QUERY_STRING="action=tokens&host=open.example.com")
+result=$(cgi "$auth" QUERY_STRING="action=credentials&host=open.example.com")
 case "$result" in
     *'"OPEN"'*) Fail ;;
     *)          Pass ;;
 esac
 
-# ── open/close: open status in tokens response ─────────────────────────────
+# ── open/close: open status in credentials response ────────────────────────
 
-Test "tokens: open:false for protected host"
-result=$(cgi "$auth" QUERY_STRING="action=tokens&host=open.example.com")
+Test "credentials: open:false for protected host"
+result=$(cgi "$auth" QUERY_STRING="action=credentials&host=open.example.com")
 case "$result" in
     *'"open":false'*) Fail ;;   # should be open:true since we set it open above
     *'"open":true'*)  Pass ;;
     *)                Fail ;;
 esac
 
-Test "tokens: open:false after close"
+Test "credentials: open:false after close"
 printf 'host=open.example.com' | \
     cgi "$auth" QUERY_STRING=action=close REQUEST_METHOD=POST > /dev/null
-result=$(cgi "$auth" QUERY_STRING="action=tokens&host=open.example.com")
+result=$(cgi "$auth" QUERY_STRING="action=credentials&host=open.example.com")
 case "$result" in
     *'"open":false'*) Pass ;;
     *)                Fail ;;
@@ -980,15 +1063,15 @@ Test "transition: open then close then open toggles correctly"
 # start protected
 printf 'host=open.example.com' | \
     cgi "$auth" QUERY_STRING=action=close REQUEST_METHOD=POST > /dev/null
-r1=$(cgi "$auth" QUERY_STRING="action=tokens&host=open.example.com")
+r1=$(cgi "$auth" QUERY_STRING="action=credentials&host=open.example.com")
 # go open
 printf 'host=open.example.com' | \
     cgi "$auth" QUERY_STRING=action=open REQUEST_METHOD=POST > /dev/null
-r2=$(cgi "$auth" QUERY_STRING="action=tokens&host=open.example.com")
+r2=$(cgi "$auth" QUERY_STRING="action=credentials&host=open.example.com")
 # go protected again
 printf 'host=open.example.com' | \
     cgi "$auth" QUERY_STRING=action=close REQUEST_METHOD=POST > /dev/null
-r3=$(cgi "$auth" QUERY_STRING="action=tokens&host=open.example.com")
+r3=$(cgi "$auth" QUERY_STRING="action=credentials&host=open.example.com")
 ok=0
 case "$r1" in *'"open":false'*) ok=$((ok+1)) ;; esac
 case "$r2" in *'"open":true'*)  ok=$((ok+1)) ;; esac
@@ -999,12 +1082,88 @@ Test "transition: existing tokens survive open/close cycle"
 # create a token, open the host, close it, verify token still present
 result=$(printf 'host=open.example.com&label=persistent' | \
     cgi "$auth" QUERY_STRING=action=create REQUEST_METHOD=POST)
-tok=$(printf '%s' "$result" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+tok=$(printf '%s' "$result" | sed -n 's/.*"value":"\([^"]*\)".*/\1/p')
 printf 'host=open.example.com' | \
     cgi "$auth" QUERY_STRING=action=open REQUEST_METHOD=POST > /dev/null
 printf 'host=open.example.com' | \
     cgi "$auth" QUERY_STRING=action=close REQUEST_METHOD=POST > /dev/null
 if [ -f "$TOKEN_ROOT/open.example.com/$tok" ]; then Pass; else Fail; fi
+
+# ── credentials: IP entries via unified create/delete ──────────────────────
+
+Test "credentials: IP symlinks are skipped"
+mkdir -p "$TOKEN_ROOT/example.com/IP"
+ln -sf /etc/hostname "$TOKEN_ROOT/example.com/IP/10.9.9.1"
+result=$(cgi "$auth" QUERY_STRING="action=credentials&host=example.com")
+rm -f "$TOKEN_ROOT/example.com/IP/10.9.9.1"
+rmdir "$TOKEN_ROOT/example.com/IP" 2>/dev/null || true
+case "$result" in
+    *'"10.9.9.1"'*) Fail ;;
+    *)              Pass ;;
+esac
+
+Test "credentials: non-IP filenames in IP dir are skipped"
+mkdir -p "$TOKEN_ROOT/example.com/IP"
+printf 'junk' > "$TOKEN_ROOT/example.com/IP/not!valid"
+result=$(cgi "$auth" QUERY_STRING="action=credentials&host=example.com")
+rm -f "$TOKEN_ROOT/example.com/IP/not!valid"
+rmdir "$TOKEN_ROOT/example.com/IP" 2>/dev/null || true
+case "$result" in
+    *'"not!valid"'*) Fail ;;
+    *)               Pass ;;
+esac
+
+Test "create: type=ip accepts IPv6 address"
+result=$(printf 'host=example.com&type=ip&value=::1&label=loopback' | \
+    cgi "$auth" QUERY_STRING=action=create REQUEST_METHOD=POST)
+case "$result" in
+    *'"::1"'*) Pass ;;
+    *)         Fail ;;
+esac
+rm -f "$TOKEN_ROOT/example.com/IP/::1"
+
+Test "create: type=ip accepts full IPv6 address"
+result=$(printf 'host=example.com&type=ip&value=2001:db8::1&label=v6host' | \
+    cgi "$auth" QUERY_STRING=action=create REQUEST_METHOD=POST)
+case "$result" in
+    *'"2001:db8::1"'*) Pass ;;
+    *)                  Fail ;;
+esac
+rm -f "$TOKEN_ROOT/example.com/IP/2001:db8::1"
+
+Test "create: type=ip control chars stripped from label"
+result=$(echo 'host=example.com&type=ip&value=10.0.0.2&label=hello%01world' | \
+    cgi "$auth" QUERY_STRING=action=create REQUEST_METHOD=POST)
+stored=$(cat "$TOKEN_ROOT/example.com/IP/10.0.0.2" 2>/dev/null)
+rm -f "$TOKEN_ROOT/example.com/IP/10.0.0.2"
+CompareArgs "$stored" "helloworld"
+
+Test "create: type=ip empty label is accepted"
+result=$(printf 'host=example.com&type=ip&value=172.16.0.1&label=' | \
+    cgi "$auth" QUERY_STRING=action=create REQUEST_METHOD=POST)
+case "$result" in
+    *'"172.16.0.1"'*) Pass ;;
+    *)                 Fail ;;
+esac
+rm -f "$TOKEN_ROOT/example.com/IP/172.16.0.1"
+
+Test "create: type=ip label stored in file"
+printf 'host=example.com&type=ip&value=10.5.5.5&label=stored' | \
+    cgi "$auth" QUERY_STRING=action=create REQUEST_METHOD=POST > /dev/null
+CompareArgs "$(cat "$TOKEN_ROOT/example.com/IP/10.5.5.5" 2>/dev/null)" "stored"
+rm -f "$TOKEN_ROOT/example.com/IP/10.5.5.5"
+
+Test "credentials: multiple IPs appear in list"
+printf 'host=example.com&type=ip&value=10.1.1.1&label=a' | \
+    cgi "$auth" QUERY_STRING=action=create REQUEST_METHOD=POST > /dev/null
+printf 'host=example.com&type=ip&value=10.1.1.2&label=b' | \
+    cgi "$auth" QUERY_STRING=action=create REQUEST_METHOD=POST > /dev/null
+result=$(cgi "$auth" QUERY_STRING="action=credentials&host=example.com")
+ip1_found=0; ip2_found=0
+case "$result" in *'"10.1.1.1"'*) ip1_found=1 ;; esac
+case "$result" in *'"10.1.1.2"'*) ip2_found=1 ;; esac
+rm -f "$TOKEN_ROOT/example.com/IP/10.1.1.1" "$TOKEN_ROOT/example.com/IP/10.1.1.2"
+if [ $ip1_found -eq 1 ] && [ $ip2_found -eq 1 ]; then Pass; else Fail; fi
 
 # ── cleanup ────────────────────────────────────────────────────────────────
 

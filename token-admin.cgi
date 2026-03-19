@@ -98,6 +98,18 @@ valid_token() {
     esac
 }
 
+# IP address: only digits, hex letters, colons, and dots.
+# Covers IPv4 (max 15 chars: 255.255.255.255) and IPv6 (max 39 chars).
+# Rejects slashes and any other character that could allow path traversal.
+valid_ip() {
+    [ -n "$1" ] || return 1
+    [ "${#1}" -le 39 ] || return 1
+    case "$1" in
+        *[!0-9a-fA-F:.]*) return 1 ;;
+        *)                 return 0 ;;
+    esac
+}
+
 # JSON-escape a string: escape backslashes and double-quotes, strip control chars.
 # Uses bash parameter expansion to avoid sed backslash-escaping ambiguity.
 json_escape() {
@@ -266,21 +278,35 @@ list)
     printf '%s\n' "$body"
     ;;
 
-tokens)
+credentials)
     host=$(param_get host "${QUERY_STRING:-}")
     valid_host "$host" || json_error 400 "invalid host"
     [ -d "$TOKEN_ROOT/$host" ]  || json_error 404 "host not found"
     open=false
     [ -f "$TOKEN_ROOT/$host/OPEN" ] && open=true
-    body="{\"host\":\"$(json_escape "$host")\",\"open\":$open,\"tokens\":["
+    body="{\"host\":\"$(json_escape "$host")\",\"open\":$open,\"credentials\":["
     sep=''
+    # IP allowlist entries
+    ip_dir="$TOKEN_ROOT/$host/IP"
+    if [ -d "$ip_dir" ]; then
+        for f in "$ip_dir/"*; do
+            [ -f "$f" ] || continue
+            [ ! -L "$f" ] || continue
+            ip=${f##*/}
+            valid_ip "$ip" || continue
+            label=$(head -c 256 "$f" 2>/dev/null) || continue
+            body="${body}${sep}{\"type\":\"ip\",\"value\":\"$(json_escape "$ip")\",\"label\":\"$(json_escape "$label")\"}"
+            sep=','
+        done
+    fi
+    # Bearer tokens
     for f in "$TOKEN_ROOT/$host/"*; do
         [ -f "$f" ] || continue
         [ ! -L "$f" ] || continue        # skip symlinks -- could exfiltrate arbitrary files
         tok=${f##*/}
         valid_token "$tok" || continue    # skip any non-token files in the dir
         label=$(head -c 256 "$f" 2>/dev/null) || continue   # cap read; skip if file vanished
-        body="${body}${sep}{\"token\":\"$(json_escape "$tok")\",\"label\":\"$(json_escape "$label")\"}"
+        body="${body}${sep}{\"type\":\"bearer\",\"value\":\"$(json_escape "$tok")\",\"label\":\"$(json_escape "$label")\"}"
         sep=','
     done
     body="${body}]}"
@@ -291,24 +317,43 @@ tokens)
 create)
     [ "${REQUEST_METHOD:-}" = "POST" ] || json_error 405 "method not allowed"
     host=$(param_get host "$POSTDATA")
+    type=$(param_get_raw type "$POSTDATA")
     label=$(param_get label "$POSTDATA")
     valid_host "$host" || json_error 400 "invalid host"
     [ "${#label}" -le 256 ] || json_error 400 "label too long"
     # Strip control characters (newlines, NUL, etc.) from label before storage.
     label=$(printf '%s' "$label" | tr -d '\000-\037\177')
-    tok=$(head -c 32 /dev/urandom | sha256sum | cut -c1-32) \
-                                      || json_error 500 "token generation failed"
-    valid_token "$tok"                || json_error 500 "token generation failed"
-    mkdir -p "$TOKEN_ROOT/$host"      || json_error 500 "cannot create host directory"
-    # Write to a temp file then rename atomically. This prevents a partial write
-    # from leaving a live (but label-less) bearer token on disk if the write fails.
-    tmpfile=$(mktemp "$TOKEN_ROOT/$host/.tmp.XXXXXX") \
-                                      || json_error 500 "cannot create temp file"
-    printf '%s' "$label" > "$tmpfile" || { rm -f "$tmpfile"; json_error 500 "cannot write token"; }
-    mv "$tmpfile" "$TOKEN_ROOT/$host/$tok" \
-                                      || { rm -f "$tmpfile"; json_error 500 "cannot install token"; }
+    case "${type:-bearer}" in
+    bearer)
+        tok=$(head -c 32 /dev/urandom | sha256sum | cut -c1-32) \
+                                          || json_error 500 "token generation failed"
+        valid_token "$tok"                || json_error 500 "token generation failed"
+        mkdir -p "$TOKEN_ROOT/$host"      || json_error 500 "cannot create host directory"
+        # Write to a temp file then rename atomically. This prevents a partial write
+        # from leaving a live (but label-less) bearer token on disk if the write fails.
+        tmpfile=$(mktemp "$TOKEN_ROOT/$host/.tmp.XXXXXX") \
+                                          || json_error 500 "cannot create temp file"
+        printf '%s' "$label" > "$tmpfile" || { rm -f "$tmpfile"; json_error 500 "cannot write token"; }
+        mv "$tmpfile" "$TOKEN_ROOT/$host/$tok" \
+                                          || { rm -f "$tmpfile"; json_error 500 "cannot install token"; }
+        body="{\"type\":\"bearer\",\"value\":\"$(json_escape "$tok")\",\"label\":\"$(json_escape "$label")\"}"
+        ;;
+    ip)
+        value=$(param_get value "$POSTDATA")
+        valid_ip "$value"                 || json_error 400 "invalid ip"
+        mkdir -p "$TOKEN_ROOT/$host/IP"   || json_error 500 "cannot create IP directory"
+        tmpfile=$(mktemp "$TOKEN_ROOT/$host/IP/.tmp.XXXXXX") \
+                                          || json_error 500 "cannot create temp file"
+        printf '%s' "$label" > "$tmpfile" || { rm -f "$tmpfile"; json_error 500 "cannot write ip file"; }
+        mv "$tmpfile" "$TOKEN_ROOT/$host/IP/$value" \
+                                          || { rm -f "$tmpfile"; json_error 500 "cannot install ip file"; }
+        body="{\"type\":\"ip\",\"value\":\"$(json_escape "$value")\",\"label\":\"$(json_escape "$label")\"}"
+        ;;
+    *)
+        json_error 400 "invalid type"
+        ;;
+    esac
     # Buffer body before headers (consistent with other branches; see architecture note).
-    body="{\"token\":\"$(json_escape "$tok")\",\"label\":\"$(json_escape "$label")\"}"
     json_headers
     printf '%s\n' "$body"
     ;;
@@ -316,10 +361,22 @@ create)
 delete)
     [ "${REQUEST_METHOD:-}" = "POST" ] || json_error 405 "method not allowed"
     host=$(param_get host "$POSTDATA")
-    tok=$(param_get token "$POSTDATA")
-    valid_host "$host"  || json_error 400 "invalid host"
-    valid_token "$tok"  || json_error 400 "invalid token"
-    rm -f "$TOKEN_ROOT/$host/$tok" || json_error 500 "cannot delete token"
+    type=$(param_get_raw type "$POSTDATA")
+    value=$(param_get value "$POSTDATA")
+    valid_host "$host" || json_error 400 "invalid host"
+    case "${type:-bearer}" in
+    bearer)
+        valid_token "$value" || json_error 400 "invalid token"
+        rm -f "$TOKEN_ROOT/$host/$value"    || json_error 500 "cannot delete token"
+        ;;
+    ip)
+        valid_ip "$value"    || json_error 400 "invalid ip"
+        rm -f "$TOKEN_ROOT/$host/IP/$value" || json_error 500 "cannot delete ip"
+        ;;
+    *)
+        json_error 400 "invalid type"
+        ;;
+    esac
     json_headers
     printf '{"status":"deleted"}\n'
     ;;
